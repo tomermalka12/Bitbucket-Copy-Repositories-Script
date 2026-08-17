@@ -73,33 +73,22 @@ def get_repositories(user_uuid, headers):
         print(f"{Fore.RED}Error: Unable to fetch repositories for user UUID {user_uuid}.")
         sys.exit(1) 
 
-def copy_repository(source_repo, target_user_uuid, headers):
-    """Copy a repository from the source user to the target user."""
-    repo_name = source_repo.get("name")
-    source_repo_slug = source_repo.get("slug")
-    source_repo_owner = source_repo.get("owner", {}).get("username")
-
-    # Construct the URL for copying the repository
-    copy_url = f"https://api.bitbucket.org/2.0/repositories/{target_user_uuid}/{repo_name}"
-
-    # Prepare the payload for copying
+def grant_repo_permission(workspace, repo_slug, target_user_uuid, permission_level, headers):
+    """
+    Grants explicit repository permission (read, write, admin) to a target user.
+    """
+    url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/permissions-config/users/{target_user_uuid}"
+    
     payload = {
-        "scm": source_repo.get("scm"),
-        "is_private": source_repo.get("is_private"),
-        "fork_policy": source_repo.get("fork_policy"),
-        "description": source_repo.get("description"),
-        "has_issues": source_repo.get("has_issues"),
-        "has_wiki": source_repo.get("has_wiki"),
-        "language": source_repo.get("language"),
-        "mainbranch": {"name": source_repo.get("mainbranch", {}).get("name")},
+        "permission": permission_level  # 'read', 'write', or 'admin'
     }
 
-    response = requests.post(copy_url, json=payload, headers=headers)
+    response = requests.put(url, json=payload, headers=headers)
 
-    if response.status_code == 201:
-        print(f"{Fore.GREEN}Successfully copied repository '{repo_name}' to target user.")
+    if response.status_code in [200, 201]:
+        print(f"Successfully granted '{permission_level}' permission on '{repo_slug}' to user '{target_user_uuid}'.")
     else:
-        print(f"{Fore.RED}Error: Failed to copy repository '{repo_name}'. Status Code: {response.status_code}")
+        print(f"Error granting permission: {response.status_code} - {response.text}")
 
 def main():
     bitbucket_token = get_bitbucket_token()
@@ -117,7 +106,7 @@ def main():
         return
 
     for repo in repositories:
-        copy_repository(repo, target_user_uuid, headers)
+        grant_repo_permission(repo, target_user_uuid, headers)
 
 if __name__ == "__main__":
     main()
