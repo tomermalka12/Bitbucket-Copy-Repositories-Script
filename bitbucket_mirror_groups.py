@@ -36,7 +36,13 @@ def get_bitbucket_token():
     return token
 
 def get_interactive_inputs():
-    workspace = input("Enter Workspace Slug: ").strip()
+    workspace = os.getenv("BITBUCKET_WORKSPACE")
+    if not workspace:
+        print(f"{Fore.RED}Error: BITBUCKET_WORKSPACE environment variable is not set.")
+        sys.exit(1)
+    #workspace = input("Enter Workspace Slug: ").strip()
+
+    # Interactively prompt for source and target users
     source_user = input("Enter Source User (username or UUID): ").strip()
     target_user = input("Enter Target User (username or UUID): ").strip()
 
