@@ -1,19 +1,21 @@
 ###### Start Safe Header ######
 # Developed by: Tomer Malka Pinto
-# Purpose: Automate Bitbucket Repositories copying flow
+# Purpose: Mirror Bitbucket Repository Permissions with Dry-Run Confirmation Step
 # date: 12/08/2026
-# version: 1.0.0
+# version: 1.6.0
 ###### End Safe Header ########
 
 import os
 import sys
+import requests
 from colorama import Fore, Style, init
 import pyfiglet
-import requests
+from dotenv import load_dotenv
 
+load_dotenv()
 init(autoreset=True)
 
-def Visual_start_script():
+def visual_start_script():
     figlet = pyfiglet.Figlet(font="slant")
     big_title = figlet.renderText("Bitbucket Copy Repositories Script")
     border = "=" * 70
@@ -22,92 +24,149 @@ def Visual_start_script():
     print(Fore.GREEN + Style.BRIGHT + big_title)
     print(Fore.CYAN + Style.BRIGHT + border)
 
-    # Developer details
-    print(
-        f"  {Fore.GREEN}{Style.BRIGHT}Developed by:{Style.RESET_ALL} Tomer Malka Pinto"
-    )
-    print(f"  {Fore.GREEN}{Style.BRIGHT}Version:{Style.RESET_ALL}      1.0.0")
+    print(f"  {Fore.GREEN}{Style.BRIGHT}Developed by:{Style.RESET_ALL} Tomer Malka Pinto")
+    print(f"  {Fore.GREEN}{Style.BRIGHT}Version:{Style.RESET_ALL}      1.6.0")
     print(Fore.CYAN + Style.BRIGHT + border + "\n")
 
-Visual_start_script()
-
 def get_bitbucket_token():
-    """Get an access token for Bitbucket API."""
     token = os.getenv("BITBUCKET_TOKEN")
     if not token:
         print(f"{Fore.RED}Error: BITBUCKET_TOKEN environment variable is not set.")
         sys.exit(1)
     return token
 
-def get_users_from_input():
+def get_interactive_inputs():
+    workspace = input("Enter Workspace Slug: ").strip()
     source_user = input("Enter Source User (username or UUID): ").strip()
     target_user = input("Enter Target User (username or UUID): ").strip()
 
-    if not source_user or not target_user:
-        print(f"{Fore.RED}Error: Both source and target users are required.")
+    if not workspace or not source_user or not target_user:
+        print(f"{Fore.RED}Error: Workspace, Source User, and Target User are all required.")
         sys.exit(1)
 
-    return source_user, target_user
+    return workspace, source_user, target_user
 
 def get_user_uuid(user_identifier, headers):
-    """Fetch the target user's UUID given a username or UUID."""
     url = f"https://api.bitbucket.org/2.0/users/{user_identifier}"
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        user_data = response.json()
-        return user_data.get("uuid")
-    else:
-        print(f"{Fore.RED}Error: Unable to fetch user UUID for {user_identifier}.")
-        sys.exit(1)
-
-def get_repositories(user_uuid, headers):
-    """Fetch all repositories for a given user UUID."""
-    url = f"https://api.bitbucket.org/2.0/repositories/{user_uuid}"
-    response = requests.get(url, headers=headers)
-
-    if response.status_code == 200:
-        repos_data = response.json()
-        return repos_data.get("values", [])
-    else:
-        print(f"{Fore.RED}Error: Unable to fetch repositories for user UUID {user_uuid}.")
-        sys.exit(1) 
-
-def grant_repo_permission(workspace, repo_slug, target_user_uuid, permission_level, headers):
-    """
-    Grants explicit repository permission (read, write, admin) to a target user.
-    """
-    url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/permissions-config/users/{target_user_uuid}"
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+        return res.json().get("uuid")
     
-    payload = {
-        "permission": permission_level  # 'read', 'write', or 'admin'
-    }
+    print(f"{Fore.RED}Error fetching UUID for user '{user_identifier}': {res.status_code} - {res.text}")
+    sys.exit(1)
 
-    response = requests.put(url, json=payload, headers=headers)
+def get_workspace_repositories(workspace, headers):
+    repositories = []
+    url = f"https://api.bitbucket.org/2.0/repositories/{workspace}"
 
-    if response.status_code in [200, 201]:
-        print(f"Successfully granted '{permission_level}' permission on '{repo_slug}' to user '{target_user_uuid}'.")
+    while url:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            data = res.json()
+            repositories.extend(data.get("values", []))
+            url = data.get("next")
+        else:
+            print(f"{Fore.RED}Error fetching repositories for workspace '{workspace}': {res.status_code}")
+            break
+
+    return repositories
+
+def get_explicit_permission(workspace, repo_slug, user_uuid, headers):
+    url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/permissions-config/users/{user_uuid}"
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+        return res.json().get("permission")  # 'read', 'write', or 'admin'
+    return None
+
+def grant_explicit_permission(workspace, repo_slug, target_uuid, permission, headers):
+    url = f"https://api.bitbucket.org/2.0/repositories/{workspace}/{repo_slug}/permissions-config/users/{target_uuid}"
+    payload = {"permission": permission}
+    res = requests.put(url, json=payload, headers=headers)
+
+    if res.status_code in [200, 201]:
+        print(f"  {Fore.GREEN}✔ Granted '{permission}' permission on '{repo_slug}'")
+        return True
     else:
-        print(f"Error granting permission: {response.status_code} - {response.text}")
+        print(f"  {Fore.RED}✖ Failed on '{repo_slug}': {res.status_code} - {res.text}")
+        return False
 
 def main():
-    bitbucket_token = get_bitbucket_token()
-    headers = {"Authorization": f"Bearer {bitbucket_token}"}
+    visual_start_script()
+    token = get_bitbucket_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
 
-    source_user, target_user = get_users_from_input()
+    workspace, source_user, target_user = get_interactive_inputs()
 
-    source_user_uuid = get_user_uuid(source_user, headers)
-    target_user_uuid = get_user_uuid(target_user, headers)
+    print(f"\n{Fore.CYAN}Resolving user UUIDs...")
+    source_uuid = get_user_uuid(source_user, headers)
+    target_uuid = get_user_uuid(target_user, headers)
 
-    repositories = get_repositories(source_user_uuid, headers)
+    print(f"{Fore.CYAN}Fetching all repositories in workspace '{workspace}'...")
+    repos = get_workspace_repositories(workspace, headers)
 
-    if not repositories:
-        print(f"{Fore.YELLOW}No repositories found for source user '{source_user}'.")
+    if not repos:
+        print(f"{Fore.YELLOW}No repositories found in workspace '{workspace}'.")
         return
 
-    for repo in repositories:
-        grant_repo_permission(repo, target_user_uuid, headers)
+    print(f"{Fore.CYAN}Found {len(repos)} total repositories. Scanning permissions (Dry-Run Phase)...\n")
+
+    pending_mirrors = []
+
+    for idx, repo in enumerate(repos, 1):
+        repo_name = repo.get("name", repo["slug"])
+        repo_slug = repo["slug"]
+        
+        print(f"[{idx}/{len(repos)}] Checking Repository: {Fore.WHITE}{Style.BRIGHT}{repo_name}{Style.RESET_ALL} ({repo_slug})")
+
+        permission = get_explicit_permission(workspace, repo_slug, source_uuid, headers)
+
+        if permission:
+            print(f"  {Fore.YELLOW}➜ PENDING MIRROR:{Style.RESET_ALL} Source user has '{permission}' permission")
+            pending_mirrors.append({"slug": repo_slug, "name": repo_name, "permission": permission})
+        else:
+            print(f"  {Fore.LIGHTBLACK_EX}• Skipped (No explicit permission set for source user){Style.RESET_ALL}")
+
+    # Display Dry-Run Summary
+    print("\n" + Fore.CYAN + "=" * 70)
+    print(Fore.YELLOW + Style.BRIGHT + "                     DRY-RUN PREVIEW")
+    print(Fore.CYAN + "=" * 70)
+
+    if not pending_mirrors:
+        print(f"{Fore.YELLOW}No explicit permissions found for source user in this workspace. Nothing to mirror.")
+        return
+
+    print(f"{Fore.WHITE}The following {len(pending_mirrors)} repository/repositories will be updated:\n")
+    for item in pending_mirrors:
+        print(f"  • {Fore.GREEN}{item['name']}{Style.RESET_ALL} ({item['slug']}) -> Will grant '{Fore.MAGENTA}{item['permission']}{Style.RESET_ALL}'")
+
+    print(Fore.CYAN + "=" * 70 + "\n")
+
+    # Interactive Confirmation Prompt
+    confirm = input(f"{Fore.CYAN}{Style.BRIGHT}Do you want to apply these permission changes to target user '{target_user}'? (y/N): {Style.RESET_ALL}").strip().lower()
+
+    if confirm != 'y':
+        print(f"\n{Fore.YELLOW}Operation canceled. No permission changes were made.")
+        return
+
+    # Execution Phase
+    print(f"\n{Fore.CYAN}Applying permission changes...\n")
+    successful_mirrors = []
+
+    for item in pending_mirrors:
+        print(f"Updating '{item['name']}'...")
+        success = grant_explicit_permission(workspace, item['slug'], target_uuid, item['permission'], headers)
+        if success:
+            successful_mirrors.append(item)
+
+    print("\n" + Fore.CYAN + "=" * 70)
+    print(Fore.GREEN + Style.BRIGHT + "                     EXECUTION SUMMARY")
+    print(Fore.CYAN + "=" * 70)
+    print(f"{Fore.GREEN}Successfully updated {len(successful_mirrors)} of {len(pending_mirrors)} repositories.{Style.RESET_ALL}\n")
 
 if __name__ == "__main__":
     main()
+
 
